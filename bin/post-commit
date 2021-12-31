@@ -3,8 +3,8 @@
 . "$(git rev-parse --show-toplevel)/bin/common.inc.sh"
 
 get_hosts() {
-	if [[ "$SIMPLC_DEMO" != "" ]]; then
-		ls "${REPO_ROOT}/hosts"
+	if [[ "$SCONF_DEMO" == "" ]]; then
+		find "${REPO_ROOT}/hosts/." -maxdepth 1 -not -name "." -not -name "host.example.com" -printf "%f "
 	else
 		echo 'host.example.com'
 	fi
