@@ -1,0 +1,69 @@
+#!/bin/bash
+
+. "$(git rev-parse --show-toplevel)/bin/common.inc.sh"
+
+tgthost="$1"
+confdiff="$2"
+rawfile=$(readlink -f "$3")
+realfile="/$(echo "$3" | cut -d'-' -f2-)"
+
+declare -A TEMPLATING
+SSH_USER="root"
+PKG_INSTALL_CMD="apt -y install"
+PKG_REMOVE_CMD="apt -y remove"
+if [[ -f "config" ]]; then
+	. "config"
+fi
+
+if [[ "$rawfile" =~ [0-9]{2}-packages$ ]]; then
+	if [[ "$confdiff" == "f" ]]; then
+		added_real=$(grep -v '^-' "$rawfile")
+		removed_real=$(grep '^-' "$rawfile" | sed -e 's/^-//g')
+	else
+		added_pkgs=$(git diff -U0 HEAD^1 HEAD -- "$rawfile" | egrep "^(\+)" | grep -Ev '^(--- a/|\+\+\+ b/)' | sed -e 's/^+//g') 
+		removed_pkgs=$(git diff -U0 HEAD^1 HEAD -- "$rawfile" | egrep "^-" | grep -v -- '--' | grep -Ev '^(--- a/|\+\+\+ b/)' | sed -e 's/^-//g')
+
+		added_minus_pkgs=$(echo "$added_pkgs" | egrep "^-" | sed -e 's/^-//g' | tr '\n' ' ')
+
+		removed_real="$(echo "$removed_pkgs" | egrep -v '^--' | sed -e 's/^-//g' | tr '\n' ' ') $added_minus_pkgs"
+		added_real="$(echo "$added_pkgs" | egrep -v '^+-' | sed -e 's/^+//g' | tr '\n' ' ')"
+	fi
+
+	if [[ "$removed_real" != "  " ]]; then
+		echo "Removing packages: \"$removed_real\""
+		$sconf_cmd ssh ${SSH_USER}@${tgthost} "$PKG_REMOVE_CMD $removed_real"
+	fi
+	if [[ "$added_real" != " " && "$added_real" != "" ]]; then
+		echo "Added packages: \"$added_real\""
+		$sconf_cmd ssh ${SSH_USER}@${tgthost} "$PKG_INSTALL_CMD $added_real"
+	fi
+else
+	filediff=$(git diff -U0 HEAD^1 HEAD -- "$rawfile" grep -Ev '^(--- a/|\+\+\+ b/)')
+
+	if [[ -z "$filediff" && "$confdiff" == "n" ]]; then
+		echo "File \"$rawfile\" wasn't changed, skipping"
+		exit 0
+	fi
+
+	declare -a sedline
+	for var in "${!TEMPLATING[@]}"; do
+		sedline+=("-e" "s $var ${TEMPLATING[$var]} g")
+	done
+
+	if [[ -e "${rawfile}.pre" ]]; then
+		echo "Executing ${rawfile}.pre..."
+		$sconf_cmd ssh "${SSH_USER}@${tgthost}" < "${rawfile}.pre"
+	fi
+
+	echo "Uploading ${rawfile}..."
+	if [ ${#sedline[@]} -eq 0 ]; then
+		$sconf_cmd cat "$rawfile"
+	else
+		$sconf_cmd sed "${sedline[@]}" "$rawfile"
+	fi | $sconf_cmd ssh "${SSH_USER}@${tgthost}" "cp $realfile ${realfile}.old; cat - > ${realfile}.new; mv ${realfile}.new ${realfile}"
+
+	if [[ -e "${rawfile}.post" ]]; then
+		echo "Executing ${rawfile}.post..."
+		$sconf_cmd ssh "${SSH_USER}@${tgthost}" < "${rawfile}.post"
+	fi
+fi

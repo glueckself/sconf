@@ -1,0 +1,24 @@
+git-commit-hook:
+* on commit deploy over ssh/...
+
+struktur:
+./.git # repo
+./bin/install # installiert hooks
+./bin/post-commit # hook
+./bin/...
+./common/ # module, datei templates, ...
+./hosts/$hostname/secret # in .gitignore commited, store credentials/...
+./hosts/$hostname/config # access method, TEMPLATE-array, ...
+./hosts/$hostname/packages # is installed/removed with apt/yum. diff against HEAD~1, if -, remove, if + install. also, if - prefix in packages, remove
+./hosts/$hostname/$file | ./$hostname/${file}.gen
+./hosts/$hostname/${file}.perm # owner:user mode
+./hosts/$hostname/${file}.pre # is executed before uploading/generating the file
+./hosts/$hostname/${file}.post # is executed after uploading/generating the file
+
+$file kommt nach / am hostname
+
+$file kann ein symlink nach $repo/common sein
+
+$file can be prefixed with "XX-", to indicate priority. default priority is 50
+thus, packages can be placed multiple times, with configuration in between
+

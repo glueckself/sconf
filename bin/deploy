@@ -1,0 +1,11 @@
+#!/bin/bash
+
+. "$(git rev-parse --show-toplevel)/bin/common.inc.sh"
+
+host="$1"
+
+# we run each host in subshell, so that $host/config don't affect each other
+(
+	cd "${REPO_ROOT}/hosts/${host}"
+	find . \( -type f -or -type l \) -and -not \( -name \*.pre -or -name \*.post \) -and -not -wholename "./config" -exec "${REPO_ROOT}/bin/process-file" "$host" "f" {} \;
+)

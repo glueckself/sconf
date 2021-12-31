@@ -1,0 +1,12 @@
+#!/bin/bash
+
+. "$(git rev-parse --show-toplevel)/bin/common.inc.sh"
+
+ln -s $(realpath --relative-to="${REPO_ROOT}/.git/hooks" "${REPO_ROOT}/bin/post-commit") "${REPO_ROOT}/.git/hooks/post-commit"
+
+git branch -m main upstream
+git checkout -b main
+
+git remote rename origin upstream
+
+echo "Please keep the upstream branch and remote, it used to update sconf"

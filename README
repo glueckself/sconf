@@ -1,0 +1,12 @@
+# Installation
+
+* Clone this repo
+* `mv sconf <your project/...>`
+* run `./bin/install` inside repo directory
+
+# Usage
+
+Create directories in hosts. The directory name must match the hostname you want to manage.
+
+Then commit files, they will be uploaded as a post-commit hook
+

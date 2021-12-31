@@ -1,0 +1,30 @@
+#!/bin/bash
+
+. "$(git rev-parse --show-toplevel)/bin/common.inc.sh"
+
+get_hosts() {
+	if [[ "$SIMPLC_DEMO" != "" ]]; then
+		ls "${REPO_ROOT}/hosts"
+	else
+		echo 'host.example.com'
+	fi
+}	
+
+#git show --name-only --oneline HEAD | grep '.metadata/' | while read line; do
+for hostdir in $(get_hosts); do
+	(
+# we run each host in subshell, so that $host/config don't affect each other
+		cd "${REPO_ROOT}/hosts/${hostdir}"
+
+		confdiff=$(git diff HEAD^1 HEAD -- config)
+		if [[ "$confdiff" == "" ]]; then
+			confdiff="n"
+		else
+			confdiff="y"
+		fi
+
+		echo "@@@@ $hostdir @@@@"
+
+		find . \( -type f -or -type l \) -and -not \( -name \*.pre -or -name \*.post \) -and -not -wholename "./config" -exec "${REPO_ROOT}/bin/process-file" "$hostdir" "$confdiff" {} \;
+	)
+done
