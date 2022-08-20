@@ -34,6 +34,19 @@ _copy_templated() {
   fi
 }
 
+_copy_files() {
+  host="$1"
+  source_dir="$2"
+  target_dir="3"
+  
+  find "$source_dir" \( -type f -or -type l \) -and -not -name \*.sgen -and -not -wholename "${source_dir}/config" | sed -e "s ${source_dir}/  g" | while read line; do
+    if [[ "$line" == */inherit && -h "$line" ]]; then
+      _copy_files "$host" $(readlink -f "$line") "$target_dir"
+    else
+      _copy_templated "$host" "$line" "$source_dir" "$target_dir"
+    fi
+  done
+
 _do_build_image() {
   host="$1"
   version="$2"
@@ -58,9 +71,7 @@ _do_build_image() {
   target_dir=$(mktemp -d --tmpdir=/tmp "sc-build-${host}.XXXXXXX")
   mount -t tmpfs none "$target_dir"
   
-  find "$source_dir" \( -type f -or -type l \) -and -not -name \*.sgen -and -not -wholename "${source_dir}/config" | sed -e "s ${source_dir}/  g" | while read line; do
-    _copy_templated "$host" "$line" "$source_dir" "$target_dir"
-  done
+  _copy_files "$host" "$source_dir" "$target_dir"
   
   cp "${INSTALL_DIR}/agent" "${target_dir}/"
   echo "${host}_${version}" > "${target_dir}/version"
