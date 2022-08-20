@@ -2,6 +2,11 @@
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
+if [[ -n $(git status -s) ]]; then
+  echo 'WARNING! Repository is dirty! Press enter if you want to continue.'
+  read
+fi
+
 INSTALL_DIR="/home/srdj/sources/sconf"
 SSH_USER="root"
 declare -A TEMPLATING
@@ -15,8 +20,6 @@ _copy_templated() {
   source_dir="$3"
   target_dir="$4"
   
-  . "${source_dir}/config"
-  
   declare -a sedline
   for var in "${!TEMPLATING[@]}"; do
     sedline+=("-e" "s $var ${TEMPLATING[$var]} g")
@@ -27,6 +30,9 @@ _copy_templated() {
   target_dir=$(dirname "$target_file")
   mkdir -p "$target_dir"
 
+  if [[ -f "$target_file" ]]; then
+    echo "WARNING: $target_file already exists, will be overwritten!!!"
+  fi
   if [[ -x "${source_file}.sgen" ]]; then
     "${source_file}.sgen" "$host" > "$target_file"
   else
@@ -37,15 +43,18 @@ _copy_templated() {
 _copy_files() {
   host="$1"
   source_dir="$2"
-  target_dir="3"
+  target_dir="$3"
   
-  find "$source_dir" \( -type f -or -type l \) -and -not -name \*.sgen -and -not -wholename "${source_dir}/config" | sed -e "s ${source_dir}/  g" | while read line; do
-    if [[ "$line" == */inherit && -h "$line" ]]; then
-      _copy_files "$host" $(readlink -f "$line") "$target_dir"
-    else
-      _copy_templated "$host" "$line" "$source_dir" "$target_dir"
-    fi
+  if [[ -d "${source_dir}/classes" ]]; then
+    find "${source_dir}/classes" -type l | while read line; do
+        (_copy_files "$host" $(readlink -f "$line") "$target_dir")
+    done
+  fi
+  
+  find "$source_dir" \( -type f -or -type l \) -and -not -name \*.sgen -and -not -wholename "${source_dir}/config" | grep -v "${source_dir}/classes/" | sed -e "s ${source_dir}/  g" | while read line; do
+      (_copy_templated "$host" "$line" "$source_dir" "$target_dir")
   done
+}
 
 _do_build_image() {
   host="$1"
@@ -83,7 +92,7 @@ _do_build_image() {
 _do_build() {
   host="$1"
   version="$2"
-  force="$5"
+  force="$3"
   
   out_file="cache/${host}_${version}.sconf"
   tmp_dir=""
@@ -170,9 +179,6 @@ Notes:
 USAGE
 }
 
-command="$1"
-shift
-
 if [[ "$1" == "--debug" ]]; then
   decho() { echo "$@" >&2; }
   set -x
@@ -180,6 +186,9 @@ if [[ "$1" == "--debug" ]]; then
 else
   decho () { :; }
 fi
+
+command="$1"
+shift
 
 case "$command" in
   "build")
