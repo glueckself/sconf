@@ -1,0 +1,182 @@
+#!/bin/bash -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+INSTALL_DIR="/home/srdj/sources/sconf"
+SSH_USER="root"
+declare -A TEMPLATING
+
+cd "$REPO_ROOT"
+mkdir -p .cache
+
+_copy_templated() {
+  host="$1"
+  rawfile="$2" # should be ./01-etc/xyz..., excluding hosts/$host
+  source_dir="$3"
+  target_dir="$4"
+  
+  . "${source_dir}/config"
+  
+  declare -a sedline
+  for var in "${!TEMPLATING[@]}"; do
+    sedline+=("-e" "s $var ${TEMPLATING[$var]} g")
+  done
+  
+  source_file="${source_dir}/${rawfile}"
+  target_file="${target_dir}/${rawfile}"
+  target_dir=$(dirname "$target_file")
+  mkdir -p "$target_dir"
+
+  if [[ -x "${source_file}.sgen" ]]; then
+    "${source_file}.sgen" "$host" > "$target_file"
+  else
+    sed "${sedline[@]}" "$source_file" > "$target_file"
+  fi
+}
+
+_do_build_image() {
+  host="$1"
+  version="$2"
+  source_dir="$3"
+  force="$4"
+  
+  . "${source_dir}/config"
+  
+  if [[ -z "$force" ]]; then
+    if [[ -f "${REPO_ROOT}/.${out_file}" ]]; then
+      decho "Build already cached, skipping build."
+      return
+    fi
+    if ssh "${SSH_USER}@${host}" ls "/var/lib/sconf/${out_file}" > /dev/null 2>&1; then
+      decho "Build exist on target host, copying to local cache..."
+      scp "${SSH_USER}@${host}:/var/lib/sconf/${out_file}" "${REPO_ROOT}/.${out_file}"
+      return
+    fi
+  fi
+  
+  echo "Building .$out_file..."
+  target_dir=$(mktemp -d --tmpdir=/tmp "sc-build-${host}.XXXXXXX")
+  mount -t tmpfs none "$target_dir"
+  
+  find "$source_dir" \( -type f -or -type l \) -and -not -name \*.sgen -and -not -wholename "${source_dir}/config" | sed -e "s ${source_dir}/  g" | while read line; do
+    _copy_templated "$host" "$line" "$source_dir" "$target_dir"
+  done
+  
+  cp "${INSTALL_DIR}/agent" "${target_dir}/"
+  echo "${host}_${version}" > "${target_dir}/version"
+  mksquashfs "${target_dir}/" "${REPO_ROOT}/.${out_file}" -noappend -all-root -no-progress > /dev/null
+  umount "$target_dir"
+  rmdir "$target_dir"
+}
+  
+_do_build() {
+  host="$1"
+  version="$2"
+  force="$5"
+  
+  out_file="cache/${host}_${version}.sconf"
+  tmp_dir=""
+  
+  if [[ "$version" == $(git rev-parse HEAD) ]]; then
+    source_dir="${REPO_ROOT}/hosts/${host}"
+  else
+    tmp_dir=$(mktemp -d --tmpdir=/tmp "sc-src-${host}.XXXXXXX")
+    mount -t tmpfs none "$tmp_dir"
+    git --work-tree="$source_dir" checkout "$version"
+    source_dir="${tmp_dir}/hosts/${host}"
+  fi
+  
+  _do_build_image "$host" "$version" "$source_dir" "$force"
+  
+  if [[ -n "$tmp_dir" ]]; then
+    umount "$tmp_dir"
+    rmdir "$tmp_dir"
+  fi
+}
+
+build() {
+  host="$1"
+  force="$2"
+  version=$(git rev-parse HEAD)
+  
+  _do_build "$host" "$version" "$force"
+}
+
+
+deploy() {
+  host="$1"
+  version=$(git rev-parse HEAD)
+
+  . "${REPO_ROOT}/hosts/${host}/config"
+  scp "${REPO_ROOT}/.cache/${host}_${version}.sconf" "${INSTALL_DIR}/agent-runner" "${SSH_USER}@${host}:/var/lib/sconf/cache/"
+  ssh "${SSH_USER}@${host}" "/var/lib/sconf/cache/agent-runner ${host}_${version}.sconf"
+}
+
+status() {
+  decho "Fetching host state..."
+  host="$1"
+  version=$(git rev-parse HEAD)
+  
+  . "${REPO_ROOT}/hosts/${host}/config"
+  cur_version=$(ssh "${SSH_USER}@${host}" "cat /var/lib/sconf/version")
+  state="mismatch: is $cur_version, should be $version"
+  if [[ "$cur_version" == "$version" ]]; then
+    state="version match"
+  fi
+  echo "Host $host $state"
+}
+
+get_all_hosts() {
+  if [[ -z "$1" ]]; then
+    ls hosts | tr '\n' ' '
+  else
+    echo "$@"
+  fi
+}
+
+help() {
+  cat <<USAGE
+Usage:
+  $0 [global options] build [--force] [<hostname> [<hostname 2> [...]]] - Build sconf packages.
+     If --force is set the package is always (re)built. Otherwise the build is skipped if the package exist in the local cache, or the package is fetched from the target host if it exists there.
+     If <hostname> is given, only the package for that host is built. You can specify multiple hostnames.
+     
+  $0 [global options] deploy [<hostname> [<hostname 2> [...]]] - Deploy the lastest packages.
+     If <hostname> is given, only the package for that host is deployed. You can specify multiple hostnames.
+     If the host was configured with sconf before, a diff package will be generated and deployed instead.
+     If either package versions (hosts current version and HEAD) don't exist in the local cache, they will be built (see above).
+     
+  $0 [global options] status [<hostname> [<hostname 2> [...]]] - Compare the sconf'ed version of the host with the local repository.
+     If <hostname> is given, only hosts status is displayed.. You can specify multiple hostnames.
+ 
+  Global Options:
+     --debug - enable debugging output
+    
+Notes:
+  Run $0 inside of a sconf data repository
+  sconf expects to have SSH root access or passwordless sudo access on the hosts.
+  Make sure to protect this repository - anyone who can commit/push to the sconf data repository has root access on the hosts!
+USAGE
+}
+
+command="$1"
+shift
+
+if [[ "$1" == "--debug" ]]; then
+  decho() { echo "$@" >&2; }
+  set -x
+  shift
+else
+  decho () { :; }
+fi
+
+case "$command" in
+  "build")
+    if [[ "$1" == "--force" ]]; then force="$1"; shift; fi
+    for host in $(get_all_hosts "$@"); do ("$command" "$host" "$force"); done 
+    ;;
+  
+  "status"|"deploy") for host in $(get_all_hosts "$@"); do ("$command" "$host"); done ;;
+  
+  *) help; exit 0 ;;
+esac

@@ -1,0 +1,84 @@
+#!/bin/bash -e
+
+tgt_dir="$1"
+if [[ "$2" == "--debug" ]]; then
+  export dcmd="echo"
+else
+  export dcmd=""
+fi
+
+if [[ -d /etc/apt ]]; then
+  export PKG_INSTALL_CMD="apt -y install"
+  export PKG_REMOVE_CMD="apt -y remove"
+else
+  export PKG_INSTALL_CMD="yum install"
+  export PKG_REMOVE_CMD="yum remove"
+fi
+
+process_file() {
+  rawfile="$1"
+  realfile="/$(echo "$1" | cut -d'-' -f2-)"
+  cur_dir="$2"
+  tgt_dir="$3"
+  
+  if [[ "$rawfile" == "agent" || "$rawfile" == "version" ]]; then
+    return
+  fi
+  
+  if [[ "$1" =~ [0-9]{2}-packages$ ]]; then
+    if [[ -z "$cur_dir" ]]; then
+      added_real=$(grep -v '^-' "$rawfile" | tr '\n' ' ')
+      removed_real=$(grep '^-' "$rawfile" | sed -e 's/^-//g' | tr '\n' ' ')
+    else
+      packages=$(diff -U 0 -d "${cur_dir}/{$rawfile}" "${tgt_dir}/{$rawfile}" | grep -v -e '^---' -e '^+++' -e '^@@')
+      added_pkgs=$(echo "$packages" | egrep "^(\+)" | sed -e 's/^+//g') 
+      removed_pkgs=$(echo "$packages" | egrep "^-" | grep -v -- '--' | sed -e 's/^-//g')
+
+      added_minus_pkgs=$(echo "$added_pkgs" | egrep "^-" | sed -e 's/^-//g' | tr '\n' ' ')
+
+      removed_real="$(echo "$removed_pkgs" | egrep -v '^--' | sed -e 's/^-//g' | tr '\n' ' ') $added_minus_pkgs"
+      added_real="$(echo "$added_pkgs" | egrep -v '^+-' | sed -e 's/^+//g' | tr '\n' ' ')"
+    fi
+
+    if [[ "$removed_real" != "  " ]]; then
+      echo "Removing packages: \"$removed_real\""
+      $dcmd $PKG_REMOVE_CMD $removed_real
+    fi
+    if [[ "$added_real" != " " && "$added_real" != "" ]]; then
+      echo "Added packages: \"$added_real\""
+      $dcmd $PKG_INSTALL_CMD $added_real
+    fi
+  else
+    if [[ -e "${tgt_dir}/${rawfile}.pre" ]]; then
+      echo "Executing ${rawfile}.pre..."
+      "${tgt_dir}/${rawfile}.pre"
+    fi
+
+    if [[ -x "${tgt_dir}/${rawfile}.agen" ]]; then
+      echo "Generating ${rawfile}..."
+      $dcmd "${tgt_dir}/${rawfile}.agen" > "$realfile"
+    else
+      $dcmd cp "${tgt_dir}/$rawfile" "$realfile"
+    fi
+
+    if [[ -e "${tgt_dir}/${rawfile}.post" ]]; then
+      echo "Executing ${rawfile}.post..."
+      "${tgt_dir}/${rawfile}.post"
+    fi
+  fi
+}
+
+get_cur_dir() {
+  current_version=$(cat /var/lib/sconf/version)
+  cur_dir=$(mktemp -d --tmpdir=/tmp "sc-agent.XXXXXXX")
+  mount -o loop "/var/lib/sconf/cache/${current_version}.sconf" "$cur_dir"
+  echo "$cur_dir"
+}
+
+cur_dir=$(get_cur_dir)
+diff -q -N -r "$cur_dir" "$tgt_dir" | while read bla old_file and new_file rest; do
+  rawfile=$(echo "$new_file" | sed -e "s ${tgt_dir}/  g")
+  process_file "$rawfile" "$cur_dir" "$tgt_dir"
+done
+cp "${tgt_dir}/version" "/var/lib/sconf/version"
+umount "$cur_dir"

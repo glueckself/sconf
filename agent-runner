@@ -1,0 +1,13 @@
+#!/bin/bash -e
+
+if [[ "$1" == "--nohuped" || -n "$STY" ]]; then
+  if [[ "$1" == "--nohuped" ]]; then
+    shift
+  fi
+  tmp_dir=$(mktemp -d --tmpdir=/tmp "sc-agent.XXXXXXX")
+  mount -o loop "/var/lib/sconf/cache/$1" "$tmp_dir"
+  "${tmp_dir}/agent" "$tmp_dir" "$@"
+  umount "$tmp_dir"
+  rmdir "$tmp_dir"
+fi
+nohup $0 --nohuped "$@" &
