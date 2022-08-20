@@ -37,6 +37,7 @@ _copy_templated() {
     "${source_file}.sgen" "$host" > "$target_file"
   else
     sed "${sedline[@]}" "$source_file" > "$target_file"
+    if [[ -x "$source_file" ]]; then chmod +x "$target_file"; fi
   fi
 }
 
@@ -125,11 +126,12 @@ build() {
 
 deploy() {
   host="$1"
+  sub_args="$2"
   version=$(git rev-parse HEAD)
 
   . "${REPO_ROOT}/hosts/${host}/config"
   scp "${REPO_ROOT}/.cache/${host}_${version}.sconf" "${INSTALL_DIR}/agent-runner" "${SSH_USER}@${host}:/var/lib/sconf/cache/"
-  ssh "${SSH_USER}@${host}" "/var/lib/sconf/cache/agent-runner ${host}_${version}.sconf"
+  ssh "${SSH_USER}@${host}" "/var/lib/sconf/cache/agent-runner ${host}_${version}.sconf $sub_args"
 }
 
 status() {
@@ -190,13 +192,19 @@ fi
 command="$1"
 shift
 
+sub_args=""
+if [[ "$1" == "--sub" ]]; then
+       sub_args="$2"
+       shift 2
+fi
+
 case "$command" in
   "build")
     if [[ "$1" == "--force" ]]; then force="$1"; shift; fi
     for host in $(get_all_hosts "$@"); do ("$command" "$host" "$force"); done 
     ;;
   
-  "status"|"deploy") for host in $(get_all_hosts "$@"); do ("$command" "$host"); done ;;
+  "status"|"deploy") for host in $(get_all_hosts "$@"); do ("$command" "$host" "$sub_args"); done ;;
   
   *) help; exit 0 ;;
 esac
